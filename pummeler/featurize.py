@@ -86,7 +86,7 @@ def _get_dummies(col, vc, with_nan, out=None, dtype=np.float64, ordered=None):
     except AttributeError:
         c = pd.Categorical(col, categories=sorted(vc.index.values)).codes
     else:
-        assert list(col.cat.categories) == sorted(vc.index.values)
+        assert sorted(col.cat.categories) == sorted(vc.index.values)
         if ordered is None:
             ordered = col.dtype.ordered
 
@@ -256,6 +256,13 @@ def get_embeddings(
     stats = deepcopy(stats)
     preprocessor.handle_stats(stats)
 
+    print(stats.keys())
+    print(stats['real_means'])
+    print('version', stats['version'])
+    print(stats['value_counts'].keys(), "with", len(stats['value_counts'].keys()), " columns")
+    print("Total of individuals", stats['n_total'])  # 2 490 616 = 0.9% of US population in 2015.
+    print()
+
     assert len(featurizers) >= 1
     feat_classes = featurizers
     if len(feat_classes) > 10:
@@ -270,6 +277,7 @@ def get_embeddings(
     to_load = list({"PWGTP"} | preprocessor.need_to_load)
 
     big_feat_names, big_feat_ids = _feat_names_ids(stats, skip_feats=always_skip)
+
     each_include = []
     for f in featurizers:
         if f.skip_feats == always_skip:

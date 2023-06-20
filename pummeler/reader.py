@@ -90,7 +90,7 @@ def read_chunks(
             continue
 
         if "drop_feats" in info:  # TODO: pass usecols to read_csv instead...
-            chunk.drop(info["drop_feats"], axis=1, inplace=True)
+            chunk.drop(info["drop_feats"], axis=1, inplace=True, errors="ignore")
 
         if "renames" in info:
             if renames is None:

@@ -22,6 +22,7 @@ from .misc import get_state_embeddings, get_merged_embeddings
 from .reader import VERSIONS
 from .stats import load_stats, save_stats
 from .sort import sort_by_region, get_puma_to_region
+from .mu_sinkhorn_featurize import MuSinkhornFeaturizer
 
 
 def main():
@@ -162,6 +163,18 @@ def main():
     g.set_defaults(format="npz")
 
     emb = featurize.add_argument_group("Embedding options")
+    emb.add_argument(
+        "--skip-linear",
+        action="store_true",
+        default=False,
+        help="Skip linear embedding (original baseline).",
+    )
+    emb.add_argument(
+        "--sinkhorn-mu",
+        action="store_true",
+        default=False,
+        help="Use Sinkhorn Mu kernel features.",
+    )
     emb.add_argument(
         "--skip-rbf",
         action="store_true",
@@ -396,7 +409,7 @@ def do_featurize(args, parser):
 
     dirname = Path(args.dir)
     stats = load_stats(dirname / 'stats')
-    files = glob(dirname.glob('feats_*'))
+    files = sorted(dirname.glob('feats_*'))
     region_names = [f.stem[6:] for f in files]
 
     if args.do_my_proc or args.do_my_additive:
@@ -420,7 +433,18 @@ def do_featurize(args, parser):
         else np.random.RandomState(args.seed)
     )
 
-    featurizers = [skipify(LinearFeaturizer)]
+    featurizers = []
+    if not args.skip_linear:
+        featurizers.append(
+            skipify(LinearFeaturizer)
+        )
+    if args.sinkhorn_mu:
+        sinkhorn_kwargs = {'epsilon': 1e-2}
+        featurizers.append(
+            skipify(MuSinkhornFeaturizer,
+                    seed=rs.randint(2 ** 23),
+                    sinkhorn_kwargs=sinkhorn_kwargs)
+        )
     if not args.skip_rbf:
         featurizers.append(
             skipify(
