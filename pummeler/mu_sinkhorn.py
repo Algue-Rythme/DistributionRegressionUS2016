@@ -1,13 +1,17 @@
 from dataclasses import dataclass
+from dataclasses import replace
+
+from functools import partial
+
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array
+from flax import struct
 import optax as ox
 import gpjax as gpx
 
-from ott.geometry import pointcloud
-from ott.problems.linear import linear_problem
-from ott.solvers.linear import sinkhorn
+from ott.geometry.pointcloud import PointCloud
+from ott.problems.linear.linear_problem import LinearProblem
+from ott.solvers.linear.sinkhorn import Sinkhorn
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error, explained_variance_score
 
@@ -76,7 +80,7 @@ def fit_posterior(task, x_train, y_train, key):
   return opt_posterior, history
 
 
-@dataclass
+@struct.dataclass
 class WeightedPointCloud:
   """A weighted point cloud.
   
@@ -84,23 +88,28 @@ class WeightedPointCloud:
     cloud: Array of shape (n, d) where n is the number of points and d the dimension.
     weights: Array of shape (n,) where n is the number of points.
   """
-  cloud: Array
-  weights: Array
+  cloud: jnp.array
+  weights: jnp.array
+
+  def __len__(self):
+    return self.cloud.shape[0]
 
 
-@dataclass
+@struct.dataclass
 class VectorizedWeightedPointCloud:
   """Vectorized version of WeightedPointCloud.
+
+  Assume that b clouds are all of size n and dimension d.
   
   Attributes:
-    _private_cloud: Array of shape (n, d) where n is the number of points and d the dimension.
-    _private_weights: Array of shape (n,) where n is the number of points.
+    _private_cloud: Array of shape (b, n, d) where n is the number of points and d the dimension.
+    _private_weights: Array of shape (b, n) where n is the number of points.
   
   Methods:
     unpack: returns the cloud and weights.
   """
-  _private_cloud: Array
-  _private_weights: Array
+  _private_cloud: jnp.array
+  _private_weights: jnp.array
 
   def __getitem__(self, idx):
     return WeightedPointCloud(self._private_cloud[idx], self._private_cloud[idx])
@@ -116,6 +125,38 @@ class VectorizedWeightedPointCloud:
     return self._private_cloud, self._private_weights
 
 
+def pad_point_cloud(point_cloud, max_cloud_size, fail_on_too_big=True):
+  """Pad a point cloud with zeros to have the same size.
+  
+  Args:
+    point_cloud: a weighted point cloud.
+    max_cloud_size: the size of the biggest point cloud.
+    fail_on_too_big: if True, raise an error if the cloud is too big for padding.
+  
+  Returns:
+    a WeightedPointCloud with padded cloud and weights.
+  """
+  cloud, weights = point_cloud.cloud, point_cloud.weights
+  delta = max_cloud_size - cloud.shape[0]
+  if delta <= 0:
+    if fail_on_too_big:
+      assert False, 'Cloud is too big for padding.'
+    return point_cloud
+
+  ratio = 1e-3  # less than 0.1% of the total mass.
+  smallest_weight = jnp.min(weights) / delta * ratio
+  small_weights = jnp.ones(delta) * smallest_weight
+
+  weights = weights * (1 - ratio)  # keep 99.9% of the mass.
+  weights = jnp.concatenate([weights, small_weights], axis=0)
+
+  cloud = jnp.pad(cloud, pad_width=((0, delta), (0,0)), mode='mean')
+
+  point_cloud = WeightedPointCloud(cloud, weights)
+
+  return point_cloud
+
+
 def pad_point_clouds(cloud_list):
   """Pad point clouds with zeros to have the same size.
 
@@ -123,26 +164,18 @@ def pad_point_clouds(cloud_list):
         is huge. O(len(cloud_list)) nodes are generated).
 
   Args:
-    cloud_list: a list of point clouds, each of shape (n, d) where n is the number of
-                points and d the dimension.
+    cloud_list: a list of WeightedPointCloud.
   
   Returns:
-    a WeightedPointCloud with padded clouds and weights.
+    a VectrorizedWeightedPointCloud with padded clouds and weights.
   """
   # sentinel for unified processing of all clouds, including biggest one.
-  max_cloud_size = max([cloud.shape[0] for cloud in data]) + 1
+  max_cloud_size = max([len(cloud) for cloud in cloud_list]) + 1
+  sentinel_padder = partial(pad_point_cloud, max_cloud_size=max_cloud_size)
 
-  def pad_cloud(cloud):
-    delta = max_cloud_size - cloud.shape[0]
-    uniform = jnp.ones(cloud.shape[0]) / cloud.shape[0]
-    zeros = jnp.zeros(delta)
-    weights = jnp.concatenate([uniform, zeros], axis=0)
-    cloud = jnp.pad(cloud, pad_width=((0, delta), (0,0)), mode='mean')
-    return cloud, weights
-
-  data = list(map(pad_cloud, data))
-  coordinates = jnp.stack([t[0] for t in data])
-  weights = jnp.stack([t[1] for t in data])
+  cloud_list = list(map(sentinel_padder, cloud_list))
+  coordinates = jnp.stack([cloud.cloud for cloud in cloud_list])
+  weights = jnp.stack([cloud.weights for cloud in cloud_list])
   return VectorizedWeightedPointCloud(coordinates, weights)
 
 
@@ -155,8 +188,8 @@ def clouds_barycenter(points):
   Returns:
     a barycenter of the clouds of points, of shape (1, d) where d is the dimension.
   """
-  coordinates, weights = points  # unpack distribution
-  barycenter = jnp.sum(coordinates * weights[:,:,jnp.newaxis], axis=1)
+  clouds, weights = points.unpack()
+  barycenter = jnp.sum(clouds * weights[:,:,jnp.newaxis], axis=1)
   barycenter = jnp.mean(barycenter, axis=0, keepdims=True)
   return barycenter
 
@@ -173,7 +206,7 @@ def to_simplex(mu):
     mu_weights = None
   else:
     mu_weights = jax.nn.softmax(mu.weights)
-  return mu._replace(weights=mu_weights)
+  return replace(mu, weights=mu_weights)
 
 
 def reparametrize_mu(mu, cloud_barycenter, scale):
@@ -191,7 +224,40 @@ def reparametrize_mu(mu, cloud_barycenter, scale):
   mu_cloud = mu.cloud - jnp.mean(mu.cloud, axis=0, keepdims=True)  # center.
   mu_cloud = scale * jnp.tanh(mu_cloud)  # re-parametrization of the domain.
   mu_cloud = mu_cloud + cloud_barycenter  # re-center toward barycenter of all clouds.
-  return mu._replace(cloud=mu_cloud)
+  return replace(mu, cloud=mu_cloud)
+
+
+def embed_single_cloud(weighted_cloud, mu,
+                       sinkhorn_solver_kwargs,
+                       has_aux=False):
+  """Compute the embedding of a single cloud with regularized OT towards mu.
+
+  Args:
+    weighted_cloud: a WeightedPointCloud.
+    mu: a WeightedPointCloud.
+    has_aux: bool, whether to return the whole output vector.
+    sinkhorn_solver_kwargs: kwargs for the Sinkhorn solver.
+
+  Returns:
+    a vector of shape (n,) where n is the number of points in Mu.
+  """
+  sinkhorn_solver_kwargs = dict(**sinkhorn_solver_kwargs)  # copy to avoid modifying the function argument.
+  sinkhorn_epsilon = sinkhorn_solver_kwargs.pop('epsilon')
+
+  geom = PointCloud(weighted_cloud.cloud, mu.cloud,
+                    epsilon=sinkhorn_epsilon)
+  
+  ot_prob = LinearProblem(geom,
+                          weighted_cloud.weights,
+                          mu.weights)
+  
+  solver = Sinkhorn(**sinkhorn_solver_kwargs)
+
+  outs = solver(ot_prob)
+
+  if has_aux:
+    return outs.g, outs
+  return outs.g
 
 
 def clouds_to_dual_sinkhorn(points, mu, 
@@ -217,24 +283,24 @@ def clouds_to_dual_sinkhorn(points, mu,
   sinkhorn_epsilon = sinkhorn_solver_kwargs.pop('epsilon')
   
   # weight projection
-  clouds_barycenter = clouds_barycenter(points)
+  barycenter = clouds_barycenter(points)
   mu = to_simplex(mu)
 
   # cloud projection
-  mu = reparametrize_mu(mu, clouds_barycenter, scale)
+  mu = reparametrize_mu(mu, barycenter, scale)
 
   def sinkhorn_single_cloud(cloud, weights, init_dual):
-    geom = pointcloud.PointCloud(cloud, mu.cloud,
-                                 epsilon=sinkhorn_epsilon)
-    ot_prob = linear_problem.LinearProblem(geom,
-                                           weights,
-                                           mu.weights)
-    solver = sinkhorn.Sinkhorn(**sinkhorn_solver_kwargs)
+    geom = PointCloud(cloud, mu.cloud,
+                      epsilon=sinkhorn_epsilon)
+    ot_prob = LinearProblem(geom,
+                            weights,
+                            mu.weights)
+    solver = Sinkhorn(**sinkhorn_solver_kwargs)
     ot = solver(ot_prob, init=init_dual)
     return ot
 
   parallel_sinkhorn = jax.vmap(sinkhorn_single_cloud,
-                               in_axes=(0, 0, 0, 0),
+                               in_axes=(0, 0, (0, 0)),
                                out_axes=0)
   
   outs = parallel_sinkhorn(*points.unpack(), init_dual)
@@ -286,7 +352,8 @@ def mu_uniform(sample_train,
     with_weight: bool, whether to return weights or not.
   
   Returns:
-    a WeightedPointCloud."""
+    a WeightedPointCloud.
+  """
   dim = sample_train[0].shape[-1]
   key_theta, key_r = jax.random.split(key)
   mu_cloud = jax.random.normal(key_theta, shape=(mu_size, dim))

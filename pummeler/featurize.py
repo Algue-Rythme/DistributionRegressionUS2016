@@ -572,7 +572,7 @@ class RFFFeaturizer(Featurizer):
     def set_feat_name_ids(self, names, ids):
         self.input_feat_names = names
         self.input_feat_ids = ids
-        self.keep_multilevels = np.ones(self.out_size, dtype=np.bool)
+        self.keep_multilevels = np.ones(self.out_size, dtype=bool)
 
     def __call__(self, feats, wts, out=None):
         if self.dtype is None:

@@ -23,6 +23,7 @@ from .reader import VERSIONS
 from .stats import load_stats, save_stats
 from .sort import sort_by_region, get_puma_to_region
 from .mu_sinkhorn_featurize import MuSinkhornFeaturizer
+from .sliced_wasserstein_featurize import SlicedWassersteinFeaturizer
 
 
 def main():
@@ -163,18 +164,56 @@ def main():
     g.set_defaults(format="npz")
 
     emb = featurize.add_argument_group("Embedding options")
+
+    # Linear
     emb.add_argument(
         "--skip-linear",
         action="store_true",
         default=False,
         help="Skip linear embedding (original baseline).",
     )
+
+    # Mu-Sinkhorn.
     emb.add_argument(
         "--sinkhorn-mu",
         action="store_true",
         default=False,
         help="Use Sinkhorn Mu kernel features.",
     )
+    emb.add_argument(
+        "--pad-clouds",
+        action="store_true",
+        default=False,
+        help="Pad clouds to the same size for Sinkhorn Mu kernel features.",
+    )
+    emb.add_argument(
+        "--mu-size",
+        type=int,
+        default=32,
+        help="Size of the support of reference measure %(default)s.",
+    )
+
+    # Sliced-Wasserstein.
+    emb.add_argument(
+        "--sliced-wasserstein",
+        action="store_true",
+        default=False,
+        help="Use sliced-wasserstein features.",
+    )
+    emb.add_argument(
+        "--n_projections",
+        type=int,
+        default=64,
+        help="Number of random projections directions.",
+    )
+    emb.add_argument(
+        "--n_discrete",
+        type=int,
+        default=64,
+        help="Number of ticks along integration direction.",
+    )
+
+    # RBF
     emb.add_argument(
         "--skip-rbf",
         action="store_true",
@@ -440,10 +479,24 @@ def do_featurize(args, parser):
         )
     if args.sinkhorn_mu:
         sinkhorn_kwargs = {'epsilon': 1e-2}
+        pad_clouds = args.pad_clouds
+        mu_size = args.mu_size
         featurizers.append(
             skipify(MuSinkhornFeaturizer,
+                    mu_size=mu_size,
                     seed=rs.randint(2 ** 23),
-                    sinkhorn_kwargs=sinkhorn_kwargs)
+                    sinkhorn_kwargs=sinkhorn_kwargs,
+                    pad_clouds=pad_clouds)
+        )
+    if args.sliced_wasserstein:
+        n_projections = args.n_projections
+        n_discrete = args.n_discrete
+        featurizers.append(
+            skipify(SlicedWassersteinFeaturizer,
+                    seed=rs.randint(2 ** 23),
+                    n_projections=n_projections,
+                    n_discrete=n_discrete,
+            )
         )
     if not args.skip_rbf:
         featurizers.append(
@@ -476,6 +529,12 @@ def do_featurize(args, parser):
         "feature_identities": featurizers[0].feat_ids,
         "keep_multilevels": featurizers[0].keep_multilevels,
     }
+    if args.sinkhorn_mu:
+        mu_featurizer = next(f for f in featurizers if isinstance(f, MuSinkhornFeaturizer))
+        res["mu"] = np.array(mu_featurizer.mu)
+    if not args.sliced_wasserstein:
+        sliced_featurizer = next(f for f in featurizers if isinstance(f, SlicedWassersteinFeaturizer))
+        res["projections"] = sliced_featurizer.projections
     if not args.skip_rbf:
         res["emb_rff"] = embeddings[1]
         res["freqs"] = featurizers[1].freqs
