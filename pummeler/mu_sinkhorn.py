@@ -126,7 +126,7 @@ class VectorizedWeightedPointCloud:
 
 
 def pad_point_cloud(point_cloud, max_cloud_size, fail_on_too_big=True):
-  """Pad a point cloud with zeros to have the same size.
+  """Pad a single point cloud with zeros to have the same size.
   
   Args:
     point_cloud: a weighted point cloud.
@@ -158,10 +158,10 @@ def pad_point_cloud(point_cloud, max_cloud_size, fail_on_too_big=True):
 
 
 def pad_point_clouds(cloud_list):
-  """Pad point clouds with zeros to have the same size.
+  """Pad the point clouds with zeros to have the same size.
 
   Note: this function should be used outside of jax.jit because the computation graph
-        is huge. O(len(cloud_list)) nodes are generated).
+        is huge. O(len(cloud_list)) nodes are generated.
 
   Args:
     cloud_list: a list of WeightedPointCloud.
@@ -269,8 +269,8 @@ def clouds_to_dual_sinkhorn(points, mu,
   
   Args:
     points: a VectorizedWeightedPointCloud.
-    init_dual: tuple of two arrays of shape (n, m) where n is the number of points
-               and m the number of points in mu.
+    init_dual: tuple of two arrays of shape (b, n) and (b, m) where b is the number of clouds,
+               n is the number of points in each cloud, and m the number of points in mu.
     scale: float, scaling parameter for the re-parametrization of mu.
     has_aux: bool, whether to return the full Sinkhorn output or only the dual variables.
     sinkhorn_solver_kwargs: dict, kwargs for the Sinkhorn solver.
