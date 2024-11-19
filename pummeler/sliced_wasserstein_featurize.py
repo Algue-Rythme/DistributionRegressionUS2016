@@ -1,10 +1,11 @@
 import numpy as np
+import jax
 from .featurize import Featurizer
 from .featurize import _keeps, _needs_nan
 from .mu_sinkhorn import embed_single_cloud, to_simplex, WeightedPointCloud, pad_point_cloud
 
 
-def random_projections(n_projections, dim, seed=None):
+def random_projections(n_projections: int, dim: int, seed=None):
   """Generate random projection vectors.
   
   Args:
@@ -21,7 +22,7 @@ def random_projections(n_projections, dim, seed=None):
   return theta
 
 
-def deterministic_projections(n_projections, dim, seed=None):
+def deterministic_projections(n_projections: int, dim: int, seed=None):
   """Generate random projection vectors.
   
   Args:
@@ -38,7 +39,7 @@ def deterministic_projections(n_projections, dim, seed=None):
   return theta, angles
 
 
-def sliced_wasserstein_embeddings(point_cloud, projections, t):
+def sliced_wasserstein_embeddings(point_cloud: tuple[jax.Array, jax.Array], projections: jax.Array, t: int):
   """Sliced Wasserstein features from projections.
   
   Args:
@@ -67,7 +68,7 @@ def sliced_wasserstein_embeddings(point_cloud, projections, t):
   return inv_cdf
 
 
-def projections_from_feats(stats, skip_feats, n_projections, seed=None):
+def projections_from_feats(stats: dict, skip_feats: list[str], n_projections: int, seed=None):
   """Generate random projection vectors from statistics.
 
   Args:
@@ -106,11 +107,11 @@ class SlicedWassersteinFeaturizer(Featurizer):
     **kwargs: kwargs for the Featurizer.
   """
 
-  def __init__(self, stats,
-               n_projections,
-               n_discrete,
-               skip_feats,
-               seed,
+  def __init__(self, stats: dict,
+               n_projections: int,
+               n_discrete: int,
+               skip_feats: list[str],
+               seed: int,
                **kwargs):
       super().__init__(stats, **kwargs)
       self.n_projections = n_projections
@@ -120,7 +121,7 @@ class SlicedWassersteinFeaturizer(Featurizer):
       self.skip_feats = skip_feats
       self.projections = projections_from_feats(stats, skip_feats, n_projections, seed=seed)
 
-  def __call__(self, feats, wts, out=None):
+  def __call__(self, feats: jax.Array, wts: jax.Array, out=None):
       """Compute the Mu Sinkhorn features.
 
       Args:
@@ -140,7 +141,13 @@ class SlicedWassersteinFeaturizer(Featurizer):
       embeddings = embeddings / np.sqrt(self.n_projections * self.n_discrete)
       return embeddings
 
-  def set_feat_name_ids(self, names, ids):
+  def set_feat_name_ids(self, names: list[str], ids: list[int]):
+      """Assign features, their id, and the white list.
+      
+      Args:
+        names: names of features
+        ids: ids of features
+      """
       self.feat_names = names
       self.feat_ids = ids
       self.keep_multilevels = _keeps(self.feat_ids)

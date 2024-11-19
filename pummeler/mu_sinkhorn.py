@@ -3,6 +3,8 @@ from dataclasses import replace
 
 from functools import partial
 
+from typing import Optional
+
 import jax
 import jax.numpy as jnp
 from flax import struct
@@ -13,10 +15,10 @@ from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear.linear_problem import LinearProblem
 from ott.solvers.linear.sinkhorn import Sinkhorn
 
-from sklearn.metrics import mean_squared_error, mean_absolute_error, explained_variance_score
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, explained_variance_score
 
 
-def gp_gaussian_posterior(dataset):
+def gp_gaussian_posterior(dataset: gpx.Dataset):
   """Returns a GP posterior with a Gaussian likelihood.
   
   Args:
@@ -31,7 +33,7 @@ def gp_gaussian_posterior(dataset):
   return posterior, negative_mll
 
 
-def gp_map_posterior(dataset):
+def gp_map_posterior(dataset: gpx.Dataset):
   """Returns a GP posterior with a Bernoulli likelihood.
   
   Args:
@@ -46,7 +48,7 @@ def gp_map_posterior(dataset):
   return posterior, negative_lpd
 
 
-def fit_posterior(task, x_train, y_train, key):
+def fit_posterior(task: str, x_train: jax.Array, y_train: jax.Array, key: jax.Array):
   """Fits a GP posterior.
 
   Args:
@@ -111,7 +113,7 @@ class VectorizedWeightedPointCloud:
   _private_cloud: jnp.array
   _private_weights: jnp.array
 
-  def __getitem__(self, idx):
+  def __getitem__(self, idx: int):
     return WeightedPointCloud(self._private_cloud[idx], self._private_cloud[idx])
   
   def __len__(self):
@@ -125,7 +127,7 @@ class VectorizedWeightedPointCloud:
     return self._private_cloud, self._private_weights
 
 
-def pad_point_cloud(point_cloud, max_cloud_size, fail_on_too_big=True):
+def pad_point_cloud(point_cloud: WeightedPointCloud, max_cloud_size: int, fail_on_too_big: bool = True):
   """Pad a single point cloud with zeros to have the same size.
   
   Args:
@@ -157,7 +159,7 @@ def pad_point_cloud(point_cloud, max_cloud_size, fail_on_too_big=True):
   return point_cloud
 
 
-def pad_point_clouds(cloud_list):
+def pad_point_clouds(cloud_list: list[WeightedPointCloud]):
   """Pad the point clouds with zeros to have the same size.
 
   Note: this function should be used outside of jax.jit because the computation graph
@@ -179,7 +181,7 @@ def pad_point_clouds(cloud_list):
   return VectorizedWeightedPointCloud(coordinates, weights)
 
 
-def clouds_barycenter(points):
+def clouds_barycenter(points: VectorizedWeightedPointCloud):
   """Compute the barycenter of a set of clouds.
   
   Args:
@@ -209,7 +211,7 @@ def to_simplex(mu):
   return replace(mu, weights=mu_weights)
 
 
-def reparametrize_mu(mu, cloud_barycenter, scale):
+def reparametrize_mu(mu: jax.Array, cloud_barycenter: jax.Array, scale: float):
   """Re-parametrize mu to be invariant by translation and scaling.
 
   Args:
@@ -227,9 +229,9 @@ def reparametrize_mu(mu, cloud_barycenter, scale):
   return replace(mu, cloud=mu_cloud)
 
 
-def embed_single_cloud(weighted_cloud, mu,
-                       sinkhorn_solver_kwargs,
-                       has_aux=False):
+def embed_single_cloud(weighted_cloud: WeightedPointCloud, mu: jax.Array,
+                       sinkhorn_solver_kwargs: dict,
+                       has_aux: bool = False):
   """Compute the embedding of a single cloud with regularized OT towards mu.
 
   Args:
@@ -260,11 +262,12 @@ def embed_single_cloud(weighted_cloud, mu,
   return outs.g
 
 
-def clouds_to_dual_sinkhorn(points, mu, 
-                            init_dual=(None, None),
-                            scale=1.,
-                            has_aux=False,
-                            sinkhorn_solver_kwargs=None):
+def clouds_to_dual_sinkhorn(points: VectorizedWeightedPointCloud,
+                            mu: jax.Array, 
+                            init_dual: tuple = (None, None),
+                            scale: float = 1.,
+                            has_aux: bool = False,
+                            sinkhorn_solver_kwargs = Optional[None]):
   """Compute the embeddings of the clouds with regularized OT towards mu.
   
   Args:
@@ -310,7 +313,26 @@ def clouds_to_dual_sinkhorn(points, mu,
   return outs.g
 
 
-def evaluate_regression(opt_posterior, mu, train_data, cloud_test, y_test, sinkhorn_solver_kwargs):
+def evaluate_regression(opt_posterior,
+                        mu: jax.Array,
+                        train_data: list[jax.Array],
+                        cloud_test: list[jax.Array],
+                        y_test: jax.Array,
+                        sinkhorn_solver_kwargs: dict) -> tuple[float, float, float, float]:
+  """Evaluate the quality of the GP regressor.
+  
+  Args:
+    opt_posterior: optimal GP posterior
+    mu: reference measure of shape (n, d_mu)
+    train_data: list of arrays of shape (n, di)
+    cloud_test: list of arrays of shape (n, di)
+    y_test: array of shape (n,)
+    sinkhorn_solver_kwargs: dict of kwargs for Sinkhorn
+  
+  Return:
+    a tuple of 4 metrics: the explained variance score, the root mean square error,
+    mean abolsute error, and the log likelihood.
+  """
   cloud_test = pad_point_clouds(cloud_test)
   x_test = clouds_to_dual_sinkhorn(cloud_test, mu, sinkhorn_solver_kwargs)
 
@@ -324,7 +346,7 @@ def evaluate_regression(opt_posterior, mu, train_data, cloud_test, y_test, sinkh
 
   try:
     evs = explained_variance_score(y_test, predictive_mean)
-    rmse = mean_squared_error(y_test, predictive_mean, squared=False)
+    rmse = root_mean_squared_error(y_test, predictive_mean)
     mae = mean_absolute_error(y_test, predictive_mean)
   except Exception as e:
     evs = float('nan')
@@ -336,11 +358,11 @@ def evaluate_regression(opt_posterior, mu, train_data, cloud_test, y_test, sinkh
   return evs, rmse, mae, log_likelihood
 
 
-def mu_uniform(sample_train,
-               key,
-               mu_size,
-               domain='ball',
-               radius=1.):
+def mu_uniform(sample_train: VectorizedWeightedPointCloud,
+               key: jax.Array,
+               mu_size: int,
+               domain: str = 'ball',
+               radius: float = 1.):
   """Sample mu from a uniform ball of radius radius around the barycenter of the clouds.
   
   Args:

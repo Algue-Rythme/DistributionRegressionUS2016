@@ -69,11 +69,13 @@ class MuSinkhornFeaturizer(Featurizer):
     **kwargs: kwargs for the Featurizer.
   """
 
-  def __init__(self, stats, mu_size,
-               skip_feats,
-               sinkhorn_kwargs,
-               seed,
-               pad_clouds,
+  def __init__(self,
+               stats: dict,
+               mu_size: int,
+               skip_feats: list[str],
+               sinkhorn_kwargs: dict,
+               seed: int,
+               pad_clouds: bool,
                **kwargs):
       super().__init__(stats, **kwargs)
       self.out_size = mu_size
@@ -87,7 +89,7 @@ class MuSinkhornFeaturizer(Featurizer):
       else:
         self.embed_single_cloud = embed_single_cloud
 
-  def __call__(self, feats, wts, out=None):
+  def __call__(self, feats: jax.Array, wts: jax.Array, out=None):
       """Compute the Mu Sinkhorn features.
 
       Args:
@@ -114,7 +116,13 @@ class MuSinkhornFeaturizer(Featurizer):
       g = onp.array(g)[:,onp.newaxis]  # shape (mu_size, 1) 
       return g
 
-  def set_feat_name_ids(self, names, ids):
+  def set_feat_name_ids(self, names: list[str], ids: list[int]):
+      """Assign features, their id, and the white list.
+      
+      Args:
+        names: names of features
+        ids: ids of features
+      """
       self.feat_names = names
       self.feat_ids = ids
       self.keep_multilevels = _keeps(self.feat_ids)
