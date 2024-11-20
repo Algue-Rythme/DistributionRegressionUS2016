@@ -3,6 +3,13 @@
 /state_*
 /puma_*
 
+# notebook stuff
+outputs/
+embeddings/
+submit.yaml
+.boltignore
+save/
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
