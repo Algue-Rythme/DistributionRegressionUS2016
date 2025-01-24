@@ -48,7 +48,7 @@ We have also improved the documentation by adding detailed docstrings, including
 
 The following notebooks are also documented:
 
-- `notebooks/toy_experiments.py`: Contains Figures 3 and 4.
-- `notebooks/radon_transform_plot.py`: Contains Figure 2.
-- `notebooks/us_data_processing.py`: Contains results of Table 1.
-- `notebooks/geomap_plot.py`: Contains results of Figure 5.
+- `notebooks/toy_experiments.ipynb`: Contains Figures 3 and 4.
+- `notebooks/radon_transform_plot.ipynb`: Contains Figure 2.
+- `notebooks/us_data_processing.ipynb`: Contains results of Table 1.
+- `notebooks/geomap_plot.ipynb`: Contains results of Figure 5.
